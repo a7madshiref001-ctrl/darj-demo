@@ -15,7 +15,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@300;400;700;800&family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/darj.css?v=1">
+<link rel="stylesheet" href="assets/darj.css?v=2">
 <style>
   body{background:var(--paper)}
   .wrap{width:100%;max-width:1160px;margin-inline:auto;padding-inline:20px}
@@ -74,7 +74,7 @@
       <span class="label">Café POS · built for Saudi coffee shops</span>
       <h1>The drawer that <em>counts</em> itself.</h1>
       <p>DARJ نظام كاشير للكافيهات: بيع أسرع، ودرج مضبوط آخر كل وردية، ومخزون يُحسب بالجرام مع كل كوب، وفاتورة ضريبية عليها QR هيئة الزكاة. ويعمل حتى لو انقطع الإنترنت.</p>
-      <div class="cta"><a class="btn btn--go btn--lg" href="app.html">جرّب الكاشير بنفسك</a><a class="btn btn--ghost btn--lg" href="kds.html" target="_blank">شاشة الباريستا</a></div>
+      <div class="cta"><a class="btn btn--go btn--lg" href="app.html#guide">جولة تفاعلية · Guide</a><a class="btn btn--ghost btn--lg" href="app.html">افتح الكاشير</a></div>
       <div class="facts"><div><b>3</b><small>ضغطات من الصنف إلى الدفع</small></div><div><b>15%</b><small>ضريبة محسوبة على كل فاتورة</small></div><div><b>0</b><small>فواتير تضيع إذا انقطع الإنترنت</small></div></div>
     </div>
     <div class="stage" aria-hidden="true"><span class="slot"></span><div id="rc"></div><div class="stamp"><b id="stNo">#—</b><small>وصل للباريستا</small></div></div>
@@ -87,6 +87,8 @@
       <div class="f" data-i="pause"><b>تعليق الفاتورة</b><span>عميل ما زال يختار؟ علّق طلبه، وخدّم من بعده، وارجع له بضغطة.</span></div>
       <div class="f" data-i="qr"><b>طلبات QR والموقع</b><span>طلب الطاولة أو الاستلام من الموقع يصل للكاشير بتنبيه صوتي، ومدفوع أونلاين.</span></div>
       <div class="f" data-i="gift"><b>ولاء برقم الجوال</b><span>ختم على كل مشروب، والهدية تُطبَّق تلقائيًا. بدون بطاقات ورقية.</span></div>
+      <div class="f" data-i="refund"><b>Refund · مرتجع واستبدال</b><span>صنف واحد أو الطلب كله، بنفس طريقة الدفع أو كاش أو استبدال بصنف آخر. يصدر إشعار دائن، والمخزون والولاء يتعدّلون تلقائيًا.</span></div>
+      <div class="f" data-i="play"><b>Guide · جولات تفاعلية</b><span>10 سيناريوهات تنوّر مكان كل ضغطة خطوة بخطوة: البيع، والتقسيم، والمرتجع، والاستبدال، وإقفال الوردية.</span></div>
       <div class="f" data-i="scan"><b>باركود واختصارات</b><span>قارئ باركود للبن المعبّى، وF2 للبحث وF8 للدفع، والواجهة عربي وإنجليزي.</span></div>
     </div><a class="open" href="app.html">افتح شاشة البيع</a></section>
 
@@ -124,8 +126,8 @@
   <footer class="foot"><span><span class="demo-tag">Demo</span> &nbsp;نسخة عرض — الكافيه والأسماء والأرقام كلها وهمية، ولا تخرج أي بيانات من الجهاز.</span><a href="https://a7madshiref001-ctrl.github.io/athr/" target="_blank" rel="noopener" lang="en">Built by ATHR</a></footer>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
-<script src="assets/img.js?v=1"></script>
-<script src="assets/darj.js?v=1"></script>
+<script src="assets/img.js?v=2"></script>
+<script src="assets/darj.js?v=2"></script>
 <script>
 (function () {
   const D = window.DARJ;

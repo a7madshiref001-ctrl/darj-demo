@@ -210,6 +210,8 @@
     apple: { ar: 'Apple Pay', en: 'Apple Pay' },
     stc: { ar: 'STC Pay', en: 'STC Pay' },
     online: { ar: 'مدفوع أونلاين', en: 'Paid online' },
+    credit: { ar: 'رصيد استبدال', en: 'Exchange credit' },
+    exchange: { ar: 'رصيد استبدال', en: 'Exchange credit' },
   };
   D.CH = {
     counter: { ar: 'الكاشير', en: 'Counter', ic: 'register' },
@@ -461,14 +463,17 @@
   D.netOf = (o) => D.r2(o.total - (o.refunded || 0));
   function expectedCash(S, sh) {
     let cash = sh.float;
-    S.orders.forEach((o) => { if (o.shift === sh.id && o.status !== 'rejected') cash += D.paid(o, 'cash'); (o.refunds || []).forEach((r) => { if (r.m === 'cash' && r.shift === sh.id) cash -= r.a; }); });
+    S.orders.forEach((o) => {
+      if (o.shift === sh.id && o.status !== 'rejected') cash -= (o.creditBack || 0) - D.paid(o, 'cash');
+      (o.refunds || []).forEach((r) => { if (r.shift === sh.id) cash -= D.refundCash(r); });
+    });
     S.payouts.forEach((p) => { if (p.shift === sh.id) cash -= p.a; });
     return D.r2(cash);
   }
   D.expectedCash = expectedCash;
   D.shiftStats = (S, sh) => {
     const os = S.orders.filter((o) => o.shift === sh.id && o.status !== 'rejected');
-    const by = { cash: 0, mada: 0, apple: 0, stc: 0, online: 0 };
+    const by = { cash: 0, mada: 0, apple: 0, stc: 0, online: 0, credit: 0 };
     os.forEach((o) => o.pays.forEach((p) => { by[p.m] = D.r2(by[p.m] + p.a); }));
     const refunds = os.reduce((a, o) => a + (o.refunded || 0), 0);
     const disc = os.reduce((a, o) => a + D.calc(S, o.lines, o.disc).disc + D.calc(S, o.lines, null).lineDisc, 0);
@@ -537,7 +542,7 @@
     const o = {
       id: 'o' + D.uid(), no: ++s.seq.no, inv: 'INV-' + (++s.seq.inv), ts: Date.now(), ch: 'counter', type: draft.type, table: draft.table,
       lines: draft.lines.map((l) => ({ pid: l.pid, qty: l.qty, mods: l.mods, note: l.note, disc: l.disc, reward: l.reward ? 1 : undefined, unit: D.unitPrice(s, l), total: D.lineTotal(s, l), cost: D.lineCost(l) })),
-      disc: draft.disc, total: c.total, vat: c.vat, net: c.net, pays: draft.pays, cash: draft.cash, staff: draft.staff, reg: 1, shift: sh ? sh.id : null,
+      disc: draft.disc, total: c.total, vat: c.vat, net: c.net, pays: draft.pays, cash: draft.cash, creditBack: draft.creditBack || 0, credit: draft.credit || null, staff: draft.staff, reg: 1, shift: sh ? sh.id : null,
       status: 'prep', tsAcc: Date.now(), synced: !s.settings.offline, name: draft.name || '',
     };
     if (draft.cust) { const cu = s.customers.find((x) => x.id === draft.cust); if (cu) { o.cust = cu.id; o.name = o.name || cu.name.split(' ')[0]; earn(s, cu, o); if (draft.redeem) { cu.rewards = Math.max(0, (cu.rewards || 0) - 1); o.redeemed = 1; } } }
@@ -556,23 +561,88 @@
     if (st === 'prep') o.tsAcc = now;
     if (st === 'ready') o.tsReady = now;
     if (st === 'done') { o.tsDone = now; if (!o.tsReady) o.tsReady = now; }
-    if (st === 'rejected') { restore(s.stock, o.lines); o.tsDone = now; }
+    if (st === 'rejected') { restore(s.stock, o.lines); o.tsDone = now; o.cancelled = 1; }
     return o;
   }, 'status');
 
+  /* ---------- refunds: إلغاء كامل · مرتجع جزئي · استبدال ---------- */
+  // الكمية اللي لسه ممكن ترجع من كل سطر
+  D.refundable = (o) => {
+    const done = {};
+    (o.refunds || []).forEach((r) => (r.lines || []).forEach(({ i, q }) => { done[i] = (done[i] || 0) + q; }));
+    return o.lines.map((l, i) => Math.max(0, l.qty - (done[i] || 0)));
+  };
+  D.canRefund = (o) => !!o && !['new', 'rejected', 'cancelled'].includes(o.status) && D.refundable(o).some((q) => q > 0);
+  // مرحلة الطلب عند الباريستا: queued = لسه ما اتبدأش، فالمكوّنات ترجع للمخزون
+  D.stage = (o) => {
+    if (o.status === 'prep') return o.started || (o.sim && Date.now() - (o.tsAcc || o.ts) > 50000) ? 'making' : 'queued';
+    return o.status;
+  };
+  // المبلغ بنسبة خصم الفاتورة (نسبة أو مبلغ)، ومقسوم على طرق الدفع الأصلية
+  D.refundQuote = (o, pick, how) => {
+    const sum = o.lines.reduce((a, l) => a + l.total, 0);
+    const k = sum ? o.total / sum : 0;
+    let a = 0;
+    pick.forEach(({ i, q }) => { const l = o.lines[i]; if (l && q) a += l.total / l.qty * q * k; });
+    a = D.r2(Math.min(D.r2(a), D.netOf(o)));
+    let parts;
+    if (how === 'cash') parts = [{ m: 'cash', a }];
+    else if (how === 'exchange') parts = [{ m: 'exchange', a }];
+    else {
+      const paid = o.pays.reduce((x, p) => x + p.a, 0) || 1;
+      parts = o.pays.map((p) => ({ m: p.m === 'credit' ? 'cash' : p.m, a: D.r2(a * p.a / paid) })).filter((p) => p.a > 0);
+      const diff = D.r2(a - parts.reduce((x, p) => x + p.a, 0));
+      if (parts.length) parts[parts.length - 1].a = D.r2(parts[parts.length - 1].a + diff);
+      const merged = {}; parts.forEach((p) => { merged[p.m] = D.r2((merged[p.m] || 0) + p.a); });
+      parts = Object.entries(merged).map(([m, v]) => ({ m, a: v }));
+    }
+    return { a, vat: D.r2(a * 15 / 115), parts };
+  };
+  D.refundCash = (r) => (r.parts ? r.parts.filter((p) => p.m === 'cash').reduce((a, p) => a + p.a, 0) : r.m === 'cash' ? r.a : 0);
   D.refund = (id, pick, meta) => D.mutate((s) => {
     const o = s.orders.find((x) => x.id === id); if (!o) return null;
-    let a = 0; const back = [];
-    pick.forEach(({ i, q }) => { const l = o.lines[i]; if (!l || !q) return; a += D.r2(l.total / l.qty * q); back.push(Object.assign({}, l, { qty: q })); });
-    if (o.disc && o.disc.type === 'pct') a *= (1 - o.disc.v / 100);
-    a = D.r2(Math.min(a, D.netOf(o)));
-    if (!a) return null;
+    const left = D.refundable(o);
+    pick = pick.map(({ i, q }) => ({ i, q: Math.min(q, left[i] || 0) })).filter((p) => p.q > 0);
+    if (!pick.length) return null;
+    const qt = D.refundQuote(o, pick, meta.how);
+    const stage = D.stage(o);
+    const now = Date.now();
     const sh = D.openShift(s, 1);
-    const r = { cn: 'CN-' + (++s.seq.cn), ts: Date.now(), a, lines: pick, by: meta.by, appr: meta.appr, reason: meta.reason, m: meta.m, shift: sh && sh.id, restock: meta.restock };
+    const r = { cn: 'CN-' + (++s.seq.cn), ts: now, a: qt.a, vat: qt.vat, parts: qt.parts, m: qt.parts.length === 1 ? qt.parts[0].m : 'split', lines: pick, by: meta.by, appr: meta.appr, reason: meta.reason, how: meta.how, shift: sh && sh.id, stage, synced: !s.settings.offline };
+    // المخزون: قبل التحضير المكوّنات ترجع، بعده المشروب هالك، والبن المعبّى يرجع للرف
+    const back = [], waste = [];
+    pick.forEach(({ i, q }) => {
+      const l = Object.assign({}, o.lines[i], { qty: q });
+      const p = D.prod(l.pid);
+      if (stage === 'queued' || (p.cat === 'beans' && meta.restockRetail !== false)) back.push(l); else waste.push(l);
+    });
+    restore(s.stock, back);
+    waste.forEach((l) => { const c = D.r2(D.recipeCost(D.recipe(l))); s.waste.push({ ts: now, pid: l.pid, q: l.qty, why: `مرتجع ${r.cn} — ${meta.reason}`, user: meta.by, cost: c }); });
+    r.back = back.length; r.waste = waste.length;
+    // الباريستا: السطر اللي رجع كله بيتشطب، ولو الطلب كله رجع بيتلغي
+    o.voided = o.voided || {};
+    pick.forEach(({ i, q }) => { o.voided[i] = (o.voided[i] || 0) + q; });
     (o.refunds = o.refunds || []).push(r);
-    o.refunded = D.r2((o.refunded || 0) + a);
-    if (meta.restock) restore(s.stock, back.filter((l) => D.prod(l.pid).cat === 'beans'));
-    D.log(meta.by, 'refund', `مرتجع ${r.cn} على ${o.inv} — ${D.fmt(a)} ر.س — السبب: ${meta.reason}`, meta.appr, 'warn');
+    o.refunded = D.r2((o.refunded || 0) + qt.a);
+    const all = D.refundable(o).every((x) => x === 0);
+    if (all && (o.status === 'prep' || o.status === 'ready')) { o.status = 'cancelled'; o.tsDone = now; }
+    if (all) o.cancelled = 1;
+    // الولاء: الأختام بتتشال، والهدية بترجع لو المشروب الهدية رجع
+    if (o.cust) {
+      const cu = s.customers.find((x) => x.id === o.cust);
+      if (cu) {
+        let cups = 0;
+        pick.forEach(({ i, q }) => { const l = o.lines[i]; if (l.reward) cu.rewards = (cu.rewards || 0) + q; else if (D.isDrink(D.prod(l.pid))) cups += q; });
+        let st = cu.stamps - cups;
+        while (st < 0 && cu.rewards > 0) { cu.rewards -= 1; st += s.settings.loyalNeed; }
+        cu.stamps = Math.max(0, st);
+        cu.spend = D.r2(Math.max(0, cu.spend - qt.a));
+        r.stamps = cups;
+      }
+    }
+    const what = pick.map(({ i, q }) => `${D.prod(o.lines[i].pid).ar} ×${q}`).join('، ');
+    D.log(meta.by, 'refund', `${all ? 'إلغاء طلب كامل' : 'مرتجع جزئي'} ${r.cn} على ${o.inv} (${what}) — ${D.fmt(qt.a)} ر.س ${meta.how === 'exchange' ? 'رصيد استبدال' : qt.parts.map((p) => D.PAY[p.m].ar).join(' + ')} — السبب: ${meta.reason}`, meta.appr, 'warn');
+    D.feedPush({ ts: now, ic: 'refund', t: `${all ? 'أُلغي طلب' : 'مرتجع على طلب'} #${o.no} — ${D.fmt(qt.a)} ر.س`, s: `${r.cn} · ${meta.reason}` });
     return r;
   }, 'refund');
 
@@ -691,6 +761,29 @@
       <div class="rc-foot">شكرًا لزيارتكم ${opt.copy ? '· <b>نسخة</b>' : ''}<br>Powered by <b>DARJ</b></div>
     </div>`;
   };
+  D.creditHTML = (o, r, opt) => {
+    opt = opt || {};
+    const s = D.state();
+    const iso = new Date(r.ts).toISOString().replace(/\.\d{3}Z$/, 'Z');
+    const enc = new TextEncoder(); const bytes = [];
+    [[1, D.STORE.sellerAr], [2, D.STORE.vat], [3, iso], [4, D.fmt(r.a).replace(/,/g, '')], [5, D.fmt(r.vat || r.a * 15 / 115).replace(/,/g, '')]].forEach(([t, v]) => { const b = enc.encode(v); bytes.push(t, b.length, ...b); });
+    let bin = ''; bytes.forEach((b) => { bin += String.fromCharCode(b); });
+    const rows = r.lines.map(({ i, q }) => { const l = o.lines[i]; const p = D.prod(l.pid); return `<div class="rc-line"><b>${q} × ${D.esc(p.ar)}</b><span class="p">${D.fmt(l.total / l.qty * q)}</span><small>${D.esc(p.en)}${l.reward ? ' · هدية الولاء' : ''}</small></div>`; }).join('');
+    const kv = (a, b) => `<div class="rc-kv"><span>${a}</span><span>${b}</span></div>`;
+    return `<div class="receipt${opt.print ? ' print' : ''}">
+      <div class="rc-logo rc-c"><b>${D.STORE.nameEn}</b><span>${D.STORE.sellerAr}</span></div>
+      <div class="rc-c">الرقم الضريبي: <span class="mono">${D.STORE.vat}</span></div>
+      <hr class="rc-hr"><div class="rc-c rc-t">إشعار دائن<br><span class="mono" style="font-weight:500;font-size:11px">Credit Note</span></div><hr class="rc-hr">
+      ${kv('رقم الإشعار', r.cn)}${kv('مرجع الفاتورة', o.inv)}${kv('التاريخ', `${D.dateNum(r.ts)} ${D.time24(r.ts)}`)}${kv('السبب', `<span style="font-family:var(--f)">${D.esc(r.reason)}</span>`)}
+      <hr class="rc-hr">${rows}<hr class="rc-hr">
+      ${kv('المبلغ قبل الضريبة', D.fmt(r.a - (r.vat || 0)))}${kv('ضريبة القيمة المضافة 15%', D.fmt(r.vat || 0))}
+      <div class="rc-kv rc-tot"><span>إجمالي المرتجع</span><span>${D.fmt(r.a)}</span></div>
+      <hr class="rc-hr">${(r.parts || [{ m: r.m, a: r.a }]).map((p) => kv(`يُعاد ${p.m === 'exchange' ? 'كرصيد استبدال' : 'عبر ' + D.PAY[p.m].ar}`, D.fmt(p.a))).join('')}
+      ${kv('نفّذه', `<span style="font-family:var(--f)">${D.esc(D.staff(r.by).short)}${r.appr ? ' · وافق ' + D.esc(D.staff(r.appr).short) : ''}</span>`)}
+      <div class="rc-qr">${D.qrSVG(btoa(bin))}<small>إشعار دائن مرتبط بالفاتورة ${o.inv}</small></div>
+      <div class="rc-foot">Powered by <b>DARJ</b></div>
+    </div>`;
+  };
   D.zHTML = (sh, st) => {
     const by = st.by;
     const row = (a, b) => `<div class="rc-kv"><span>${a}</span><span>${b}</span></div>`;
@@ -769,6 +862,8 @@
     home: '<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1v-9Z"/>',
     volume: '<path d="M4 9v6h4l5 4V5L8 9H4ZM16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/>',
     globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 3 2.5 15 0 18M12 3c-2.5 3-2.5 15 0 18"/>',
+    play: '<circle cx="12" cy="12" r="9"/><path d="M10 8.6v6.8l5.6-3.4L10 8.6Z" fill="currentColor"/>',
+    swap: '<path d="M4 8h14l-3.5-3.5M20 16H6l3.5 3.5"/>',
   };
   D.icon = (n, cls) => `<svg class="ico${cls ? ' ' + cls : ''}" viewBox="0 0 24 24" aria-hidden="true">${P[n] || P.cup}</svg>`;
   D.mark = (size) => `<svg class="brand__mark" ${size ? `style="width:${size}px;height:${size}px"` : ''} viewBox="0 0 32 32" aria-hidden="true"><rect x="9.5" y="1.5" width="13" height="9" rx="1.5" fill="#fff" stroke="#15130F" stroke-width="1.6"/><path d="M12.5 4.6h7M12.5 7.2h4.5" stroke="#15130F" stroke-width="1.4" stroke-linecap="round"/><rect x="2" y="9" width="28" height="21" rx="6.5" fill="#15130F"/><rect x="6" y="18.5" width="20" height="8" rx="3" fill="#0E7A55"/><rect x="12.5" y="21.6" width="7" height="1.9" rx=".95" fill="#fff"/><rect x="8" y="12.4" width="16" height="2" rx="1" fill="#fff" opacity=".28"/></svg>`;

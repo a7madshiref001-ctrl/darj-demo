@@ -22,6 +22,9 @@
       if (!D.isDrink(p)) return '';
       const chips = D.modList(l).filter(({ o: op }) => op.k).map(({ o: op, g }) => `<span class="${g === 'size' ? 'soft' : ''}">${op.k}</span>`).join('');
       const done = (o.lineDone || []).includes(i);
+      const v = (o.voided && o.voided[i]) || 0;
+      const left = l.qty - v;
+      if (v) return `<div class="kt__l done void"><b>${left || l.qty}</b><div><div class="nm">${D.esc(lang === 'en' ? p.en : p.ar)}</div><div class="mods"><span class="void">${lang === 'en' ? 'VOID' : 'ملغي'} −${v}</span></div></div></div>` + (left ? `<div class="kt__l" data-line="${i}" data-id="${o.id}"><b>${left}</b><div><div class="nm">${D.esc(lang === 'en' ? p.en : p.ar)}</div>${chips ? `<div class="mods">${chips}</div>` : ''}</div></div>` : '');
       return `<div class="kt__l${done ? ' done' : ''}" data-line="${i}" data-id="${o.id}"><b>${l.qty}</b><div><div class="nm">${D.esc(lang === 'en' ? p.en : p.ar)}</div><div class="ar">${D.esc(lang === 'en' ? p.ar : p.en)}</div>${chips ? `<div class="mods">${chips}</div>` : ''}${l.note ? `<div class="note">${D.esc(l.note)}</div>` : ''}</div></div>`;
     }).join('');
     const food = o.lines.filter((l) => !D.isDrink(D.prod(l.pid))).map((l) => `${l.qty}× ${D.esc(lang === 'en' ? D.prod(l.pid).en : D.prod(l.pid).ar)}`).join(' · ');
@@ -52,7 +55,7 @@
       if (fresh && opt.sound !== false) D.sound('new');
       first = false;
       const allday = {};
-      [...cols.new, ...cols.make].forEach((o) => o.lines.forEach((l) => { const p = D.prod(l.pid); if (D.isDrink(p)) allday[p.id] = (allday[p.id] || 0) + l.qty; }));
+      [...cols.new, ...cols.make].forEach((o) => o.lines.forEach((l, i) => { const p = D.prod(l.pid); const n = l.qty - ((o.voided && o.voided[i]) || 0); if (D.isDrink(p) && n > 0) allday[p.id] = (allday[p.id] || 0) + n; }));
       const ad = Object.entries(allday).sort((a, b) => b[1] - a[1]).map(([id, n]) => `<span><b>${n}</b> ${D.esc(lang === 'en' ? D.prod(id).en : D.prod(id).ar)}</span>`).join('');
       const col = (k, title) => `<section class="kds__col"><div class="kds__h"><b>${title}</b><span>${cols[k].length}</span></div>${cols[k].map((o) => ticket(o, now, lang)).join('') || `<div class="empty">${D.icon('cup')}<span>${t.empty}</span></div>`}</section>`;
       el.innerHTML = `${ad ? `<div class="allday"><span class="label" style="border:0;background:none;padding:0">${t.allday}</span>${ad}</div>` : ''}<div class="kds">${col('new', t.new)}${col('make', t.make)}${col('ready', t.ready)}</div>`;
